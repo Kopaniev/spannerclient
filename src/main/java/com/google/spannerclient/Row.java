@@ -78,8 +78,8 @@ public class Row implements RowBase {
    *     type().structFields()} with {@link Type.StructField#getName()} equal to {@code columnName}
    */
   @Override
-  public int getColumnIndex(String columnName) {
-    for (int i = 0; i < fields.size() - 1; i++) {
+  public int getColumnIndex(String columnName) throws IllegalArgumentException {
+    for (int i = 0; i < fields.size(); i++) {
       if (fields.get(i).getName().equals(columnName)) {
         return i;
       }
