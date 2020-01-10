@@ -231,4 +231,82 @@ public class Spanner {
       }
     }
   }
+
+  public static void executeStreamingReadOnlyStrong(
+      QueryOptions options, Database db, SpannerStreamingHandler handler, Query query) {
+    // Preconditions.checkNotNull(options);
+    Preconditions.checkNotNull(db);
+    Preconditions.checkNotNull(handler);
+    Preconditions.checkNotNull(query);
+
+    final Optional<SessionContext> sessionOptional = db.sessionPool().tryGet();
+    final List<PartialResultSet> resultSetList = new ArrayList<>();
+
+    if (sessionOptional.isPresent()) {
+      final SessionContext session = sessionOptional.get();
+      if (session.lock()) {
+        db.stub()
+            .executeStreamingSql(
+                Context.getDefault(),
+                ExecuteSqlRequest.newBuilder()
+                    .setSession(session.getName())
+                    .setSql(query.getSql())
+                    .setTransaction(
+                        TransactionSelector.newBuilder()
+                            .setSingleUse(
+                                TransactionOptions.newBuilder()
+                                    .setReadOnly(
+                                        TransactionOptions.ReadOnly.newBuilder().setStrong(true))
+                                    .build())
+                            .build())
+                    .build(),
+                new StreamObserver<PartialResultSet>() {
+                  @Override
+                  public void onNext(PartialResultSet value) {
+                    final ImmutableList<StructType.Field> fieldList =
+                        ImmutableList.copyOf(value.getMetadata().getRowType().getFieldsList());
+                    if (value.getChunkedValue()) {
+                      resultSetList.add(value);
+                    } else {
+                      ResultSet resultSet =
+                          PartialResultSetCombiner.combine(
+                              ImmutableList.of(value), fieldList.size(), 0);
+                      RowCursor rowCursor =
+                          RowCursor.of(fieldList, ImmutableList.copyOf(resultSet.getRowsList()));
+                      while (rowCursor.next()) {
+                        handler.apply(rowCursor.getCurrentRow());
+                      }
+                    }
+                  }
+
+                  @Override
+                  public void onError(Throwable t) {
+                    session.unlock();
+                  }
+
+                  @Override
+                  public void onCompleted() {
+                    if (resultSetList.size() >= 1) {
+                      final ImmutableList<StructType.Field> fieldList =
+                          ImmutableList.copyOf(
+                              resultSetList.get(0).getMetadata().getRowType().getFieldsList());
+                      final ResultSet resultSet =
+                          PartialResultSetCombiner.combine(resultSetList, fieldList.size(), 0);
+                      final ImmutableList<ListValue> rowList =
+                          ImmutableList.copyOf(resultSet.getRowsList());
+                      rowList.forEach(
+                          v -> {
+                            handler.apply(
+                                Row.of(fieldList, ImmutableList.copyOf(v.getValuesList())));
+                          });
+                    }
+                    session.unlock();
+                  }
+                });
+
+      } else {
+        // -------
+      }
+    }
+  }
 }
