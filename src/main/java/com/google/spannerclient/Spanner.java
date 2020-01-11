@@ -123,15 +123,9 @@ public class Spanner {
     if (sessionOptional.isPresent()) {
       final SessionContext session = sessionOptional.get();
       if (session.lock()) {
-
-        ListenableFuture<ResultSet> resultSetListenableFuture =
-            db.stub()
-                .executeSql(
-                    Context.getDefault(),
-                    ExecuteSqlRequest.newBuilder()
-                        .setSession(session.getName())
-                        .setSql(query.getSql())
-                        .build());
+        final ExecuteSqlRequest req = getExecuteSqlRequest(options, query, session.getName());
+        final ListenableFuture<ResultSet> resultSetListenableFuture =
+            db.stub().executeSql(Context.getDefault(), req);
         Futures.addCallback(
             resultSetListenableFuture,
             new FutureCallback<ResultSet>() {
@@ -171,17 +165,14 @@ public class Spanner {
 
     final Optional<SessionContext> sessionOptional = db.sessionPool().tryGet();
     final List<PartialResultSet> resultSetList = new ArrayList<>();
-
     if (sessionOptional.isPresent()) {
       final SessionContext session = sessionOptional.get();
       if (session.lock()) {
+        final ExecuteSqlRequest req = getExecuteSqlRequest(options, query, session.getName());
         db.stub()
             .executeStreamingSql(
                 Context.getDefault(),
-                ExecuteSqlRequest.newBuilder()
-                    .setSession(session.getName())
-                    .setSql(query.getSql())
-                    .build(),
+                req,
                 new StreamObserver<PartialResultSet>() {
                   @Override
                   public void onNext(PartialResultSet value) {
@@ -232,81 +223,43 @@ public class Spanner {
     }
   }
 
-  public static void executeStreamingReadOnlyStrong(
-      QueryOptions options, Database db, SpannerStreamingHandler handler, Query query) {
-    // Preconditions.checkNotNull(options);
-    Preconditions.checkNotNull(db);
-    Preconditions.checkNotNull(handler);
-    Preconditions.checkNotNull(query);
+  private static ExecuteSqlRequest getExecuteSqlRequest(
+      QueryOptions options, Query query, String session) {
+    // If strong and stale are both set, will return strong;
+    if (options.readOnly()) {
+      if (options.strong()) {
+        return ExecuteSqlRequest.newBuilder()
+            .setSession(session)
+            .setSql(query.getSql())
+            .setTransaction(
+                TransactionSelector.newBuilder()
+                    .setSingleUse(
+                        TransactionOptions.newBuilder()
+                            .setReadOnly(TransactionOptions.ReadOnly.newBuilder().setStrong(true))
+                            .build()))
+            .build();
+      }
 
-    final Optional<SessionContext> sessionOptional = db.sessionPool().tryGet();
-    final List<PartialResultSet> resultSetList = new ArrayList<>();
-
-    if (sessionOptional.isPresent()) {
-      final SessionContext session = sessionOptional.get();
-      if (session.lock()) {
-        db.stub()
-            .executeStreamingSql(
-                Context.getDefault(),
-                ExecuteSqlRequest.newBuilder()
-                    .setSession(session.getName())
-                    .setSql(query.getSql())
-                    .setTransaction(
-                        TransactionSelector.newBuilder()
-                            .setSingleUse(
-                                TransactionOptions.newBuilder()
-                                    .setReadOnly(
-                                        TransactionOptions.ReadOnly.newBuilder().setStrong(true))
-                                    .build())
-                            .build())
-                    .build(),
-                new StreamObserver<PartialResultSet>() {
-                  @Override
-                  public void onNext(PartialResultSet value) {
-                    final ImmutableList<StructType.Field> fieldList =
-                        ImmutableList.copyOf(value.getMetadata().getRowType().getFieldsList());
-                    if (value.getChunkedValue()) {
-                      resultSetList.add(value);
-                    } else {
-                      ResultSet resultSet =
-                          PartialResultSetCombiner.combine(
-                              ImmutableList.of(value), fieldList.size(), 0);
-                      RowCursor rowCursor =
-                          RowCursor.of(fieldList, ImmutableList.copyOf(resultSet.getRowsList()));
-                      while (rowCursor.next()) {
-                        handler.apply(rowCursor.getCurrentRow());
-                      }
-                    }
-                  }
-
-                  @Override
-                  public void onError(Throwable t) {
-                    session.unlock();
-                  }
-
-                  @Override
-                  public void onCompleted() {
-                    if (resultSetList.size() >= 1) {
-                      final ImmutableList<StructType.Field> fieldList =
-                          ImmutableList.copyOf(
-                              resultSetList.get(0).getMetadata().getRowType().getFieldsList());
-                      final ResultSet resultSet =
-                          PartialResultSetCombiner.combine(resultSetList, fieldList.size(), 0);
-                      final ImmutableList<ListValue> rowList =
-                          ImmutableList.copyOf(resultSet.getRowsList());
-                      rowList.forEach(
-                          v -> {
-                            handler.apply(
-                                Row.of(fieldList, ImmutableList.copyOf(v.getValuesList())));
-                          });
-                    }
-                    session.unlock();
-                  }
-                });
-
-      } else {
-        // -------
+      if (options.stale()) {
+        Preconditions.checkArgument(options.maxStaleness() > 0);
+        return ExecuteSqlRequest.newBuilder()
+            .setSession(session)
+            .setSql(query.getSql())
+            .setTransaction(
+                TransactionSelector.newBuilder()
+                    .setSingleUse(
+                        TransactionOptions.newBuilder()
+                            .setReadOnly(
+                                TransactionOptions.ReadOnly.newBuilder()
+                                    .setMaxStaleness(
+                                        com.google.protobuf.Duration.newBuilder()
+                                            .setSeconds(options.maxStaleness())
+                                            .build()))
+                            .build()))
+            .build();
       }
     }
+
+    return ExecuteSqlRequest.newBuilder().setSession(session).setSql(query.getSql()).build();
   }
 }

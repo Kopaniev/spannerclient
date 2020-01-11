@@ -38,6 +38,8 @@ public class Row implements RowBase {
   private final ImmutableList<Value> values;
 
   public Row(ImmutableList<StructType.Field> fields, ImmutableList<Value> values) {
+    Preconditions.checkNotNull(fields);
+    Preconditions.checkNotNull(values);
 
     this.fields = fields;
     this.values = values;
