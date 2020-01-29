@@ -87,7 +87,7 @@ public class Row implements RowBase {
       }
     }
 
-    throw new IllegalArgumentException();
+    throw new IllegalArgumentException("Couldn't find column '" + columnName + "'");
   }
 
   /**
