@@ -30,8 +30,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class Spanner {
+  private static final Logger log = LoggerFactory.getLogger(Spanner.class);
 
   public static Database openDatabase(
       Options options, String dbPath, GoogleCredentials credentials) {
@@ -174,21 +177,28 @@ public class Spanner {
                 Context.getDefault(),
                 req,
                 new StreamObserver<PartialResultSet>() {
+                  ImmutableList<StructType.Field> fieldList = null;
                   @Override
                   public void onNext(PartialResultSet value) {
-                    final ImmutableList<StructType.Field> fieldList =
-                        ImmutableList.copyOf(value.getMetadata().getRowType().getFieldsList());
+                    // Only the first PartialResultSet will contain Metadata
+                    if (fieldList == null) {
+                      fieldList = ImmutableList.copyOf(value.getMetadata().getRowType().getFieldsList());
+                    }
                     if (value.getChunkedValue()) {
+                      // this value is chunked, we can't process it until we received a non chunked value
+                      // append it to the resultSetList and process it later
                       resultSetList.add(value);
                     } else {
+                      resultSetList.add(value);
                       ResultSet resultSet =
-                          PartialResultSetCombiner.combine(
-                              ImmutableList.of(value), fieldList.size(), 0);
+                        PartialResultSetCombiner.combine(
+                            resultSetList, fieldList.size(), 0);
                       RowCursor rowCursor =
                           RowCursor.of(fieldList, ImmutableList.copyOf(resultSet.getRowsList()));
                       while (rowCursor.next()) {
                         handler.apply(rowCursor.getCurrentRow());
                       }
+                      resultSetList.clear();
                     }
                   }
 
@@ -199,10 +209,8 @@ public class Spanner {
 
                   @Override
                   public void onCompleted() {
-                    if (resultSetList.size() >= 1) {
-                      final ImmutableList<StructType.Field> fieldList =
-                          ImmutableList.copyOf(
-                              resultSetList.get(0).getMetadata().getRowType().getFieldsList());
+                    if (resultSetList.size() >= 1 && fieldList != null) {
+                      log.warn("onCompleted called with resuletSetList.size = " + resultSetList.size());
                       final ResultSet resultSet =
                           PartialResultSetCombiner.combine(resultSetList, fieldList.size(), 0);
                       final ImmutableList<ListValue> rowList =
