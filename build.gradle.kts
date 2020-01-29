@@ -18,7 +18,10 @@ plugins {
     id("com.diffplug.gradle.spotless") version "3.24.0"
     id("net.ltgt.errorprone") version "0.8.1"
     kotlin("jvm") version "1.3.50"
+    id("net.saliman.cobertura") version "3.0.0"
+    id("com.github.kt3k.coveralls") version "2.9.0"
 }
+
 
 repositories {
     mavenCentral()
@@ -171,4 +174,11 @@ idea {
         // If you have additional sources, add them here:
         sourceDirs.add(file("$projectDir/gen"))
     }
+}
+
+cobertura {
+    coverageExcludes = listOf("com.google.protobuf.*", "protobuf_unittest.*")
+    coverageFormats = setOf("html", "xml") // coveralls plugin depends on xml format report
+    // coverageIgnoreTrivial = true
+    // coverageReportDir = new File("$buildDir/reports/cobertura")
 }
