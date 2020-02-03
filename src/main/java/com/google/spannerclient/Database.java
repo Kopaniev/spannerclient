@@ -113,7 +113,7 @@ public class Database {
                       }
                     }
                   });
-              f.set(getClazz());
+              f.set(Database.this);
             }
           }
 
@@ -129,10 +129,6 @@ public class Database {
 
   public void close() throws IOException {
     stub.close();
-  }
-
-  private Database getClazz() {
-    return this;
   }
 
   public Table getTable(String tableName) {
